@@ -44,6 +44,43 @@ By combining local cultural identity with cutting-edge AI, LiotRAG bridges **aca
 
 ---
 
+# Local Frontend
+
+To setup the local frontent, follow these steps
+
+1. Populate the `.env.frontend` variable with that of the `Azure Container App` endpoint (do NOT place it in quotes)
+
+2. Build the Docker container
+
+```bash
+cd ~/LiotRAG
+```
+
+```bash
+docker build -f ./Dockerfiles/Dockerfile.frontend -t liotrag-frontend:1.0.0 .
+```
+
+3. Run the image locally
+
+```bash
+docker run --rm --env-file .env.frontend -p 8000:8000 liotrag-frontend:1.0.0
+```
+
+4. Connect to the browser on
+
+```bash
+http://127.0.0.1:8000/
+```
+
+Where you will find this `Frontend UI`
+
+![LiotRAG Frontend](./assets/imgs/liotrag-frontend.png)
+
+
+And the queries are properly rendered with *streaming responses*
+
+![LiotRAG Demo 1](./assets/imgs/liotrag-demo-1.png)
+
 ## 📜 License  
 
 [GPL-3.0](LICENSE) — Free to use, modify, and redistribute under the same terms.  
