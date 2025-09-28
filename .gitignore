@@ -5,6 +5,3 @@ __pycache__
 src/function-app/local.settings.json
 
 *.zip
-
-# Temporary Exception
-src/function-app
