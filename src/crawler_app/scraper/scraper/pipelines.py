@@ -153,7 +153,7 @@ class AzureBlobPipeline:
         # Resolve settings from args or env
         self.conn_str = conn_str or os.getenv("AZURE_STORAGE_CONNECTION_STRING")
         self.account_url = account_url or os.getenv("AZURE_STORAGE_ACCOUNT_URL")
-        self.container_name = container or os.getenv("AZURE_BLOB_CONTAINER", "ao-papardo-kb")
+        self.container_name = container or os.getenv("AZURE_BLOB_CONTAINER", "pages")
 
         # Determine if SDKs are available
         if BlobServiceClient is None:
@@ -189,7 +189,7 @@ class AzureBlobPipeline:
             or os.getenv("AZURE_STORAGE_CONNECTION_STRING")
         )
         container = crawler.settings.get(
-            "AZURE_BLOB_CONTAINER", os.getenv("AZURE_BLOB_CONTAINER", "ao-papardo-kb")
+            "AZURE_BLOB_CONTAINER", os.getenv("AZURE_BLOB_CONTAINER", "pages")
         )
         account_url = (
             crawler.settings.get("AZURE_STORAGE_ACCOUNT_URL")

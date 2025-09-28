@@ -10,7 +10,7 @@ app = func.FunctionApp()
 @app.timer_trigger(
     schedule="0 0 1 * * *",  # every day at 01:00 UTC
     arg_name="myTimer",
-    run_on_startup=True,
+    run_on_startup=False,
     use_monitor=True,
 )
 def scrapePapardo(myTimer: func.TimerRequest) -> None:
@@ -25,7 +25,7 @@ def scrapePapardo(myTimer: func.TimerRequest) -> None:
             env["AZURE_STORAGE_CONNECTION_STRING"] = env["AzureWebJobsStorage"]
 
     # Where to store blobs: container
-    env.setdefault("AZURE_BLOB_CONTAINER", "ao-papardo-kb")
+    env.setdefault("AZURE_BLOB_CONTAINER", "pages")
     # Allow passing through explicit account URL for Managed Identity
     if "AZURE_STORAGE_ACCOUNT_URL" in os.environ:
         env["AZURE_STORAGE_ACCOUNT_URL"] = os.environ["AZURE_STORAGE_ACCOUNT_URL"]
