@@ -1,0 +1,16 @@
+# Core Requirements
+fastapi
+uvicorn[standard]
+pydantic
+
+# Azure Specific Requirements
+azure-identity
+azure-ai-inference
+azure-mgmt-redis
+azure-functions
+azure-keyvault-secrets
+azure-search-documents
+redis
+redis_entraid
+
+jinja2
