@@ -149,3 +149,5 @@ def redis_read(key: str):
         return {"key": key, "value": value}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+    
