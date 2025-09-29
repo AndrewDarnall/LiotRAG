@@ -106,22 +106,7 @@ jobs:
             --query "name" -o tsv || echo "")
 
           if [ -n "$APP_EXISTS" ]; then
-            echo "Container App exists, updating active revisions..."
-
-            ACTIVE_REVS=$(az containerapp revision list \
-              --name "$CONTAINER_APP" \
-              --resource-group "$RESOURCE_GROUP" \
-              --query "[?active==true].name" -o tsv || echo "")
-
-            if [ -n "$ACTIVE_REVS" ]; then
-              for rev in $ACTIVE_REVS; do
-                az containerapp revision update --name $rev \
-                  --resource-group "$RESOURCE_GROUP" \
-                  --set active=false
-              done
-            fi
-
-            # Update existing Container App with new image
+            echo "Container App exists, updating image..."
             az containerapp update \
               --name "$CONTAINER_APP" \
               --resource-group "$RESOURCE_GROUP" \
@@ -136,7 +121,6 @@ jobs:
                 AZURE_OPENAI_ENDPOINT="${{ secrets.AZURE_OPENAI_ENDPOINT }}" \
                 AZURE_OPENAI_DEPLOYMENT="${{ secrets.AZURE_OPENAI_DEPLOYMENT }}" \
                 AZURE_OPENAI_API_VERSION="${{ secrets.AZURE_OPENAI_API_VERSION }}"
-
           else
             echo "Container App does not exist, creating a new one..."
             az containerapp create \
@@ -158,7 +142,6 @@ jobs:
                 AZURE_OPENAI_ENDPOINT="${{ secrets.AZURE_OPENAI_ENDPOINT }}" \
                 AZURE_OPENAI_DEPLOYMENT="${{ secrets.AZURE_OPENAI_DEPLOYMENT }}" \
                 AZURE_OPENAI_API_VERSION="${{ secrets.AZURE_OPENAI_API_VERSION }}"
-          fi
 
   # -----------------------------
   # Deploy Function App
@@ -184,4 +167,9 @@ jobs:
           az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
 
       - name: Deploy Function App
-        run: bash ./az-func-deploy.sh
+        run: |
+          zip -r functionapp.zip ./src/function-app
+          az functionapp deployment source config-zip \
+            --name "${{ secrets.AZURE_FUNCTION_APP }}" \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --src functionapp.zip
