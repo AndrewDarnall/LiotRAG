@@ -150,107 +150,107 @@ jobs:
   # -----------------------------
   # Deploy Function App
   # -----------------------------
-deploy-function-app:
-  runs-on: ubuntu-latest
-  needs: build-and-push
-  steps:
-    - uses: actions/checkout@v4
+  deploy-function-app:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    steps:
+      - uses: actions/checkout@v4
 
-    - name: Install deps
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y zip python3 python3-pip curl
-        pip3 install --upgrade pip azure-cli
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zip python3 python3-pip curl
+          pip3 install --upgrade pip azure-cli
 
-    - name: Azure Login
-      run: |
-        az login --service-principal \
-          -u "${{ secrets.AZURE_CLIENT_ID }}" \
-          -p "${{ secrets.AZURE_CLIENT_SECRET }}" \
-          --tenant "${{ secrets.AZURE_TENANT_ID }}"
-        az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+      - name: Azure Login
+        run: |
+          az login --service-principal \
+            -u "${{ secrets.AZURE_CLIENT_ID }}" \
+            -p "${{ secrets.AZURE_CLIENT_SECRET }}" \
+            --tenant "${{ secrets.AZURE_TENANT_ID }}"
+          az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
 
-    - name: Deploy Function App
-      run: |
-        set -e
+      - name: Deploy Function App
+        run: |
+          set -e
 
-        FUNCTION_APP="${{ secrets.AZURE_FUNCTION_APP }}"
-        RESOURCE_GROUP="${{ secrets.AZURE_RESOURCE_GROUP }}"
-        STORAGE_ACCOUNT="${{ secrets.AZURE_FUNCTION_STORAGE }}"
-        CONTAINER_NAME="${{ secrets.AZURE_FUNCTION_STORAGE_CONTAINER }}"
-        ZIP_FILE="functionapp.zip"
-        REGION="${{ secrets.AZURE_FA_REGION }}"
-        SAS_EXPIRY_MINUTES=10
+          FUNCTION_APP="${{ secrets.AZURE_FUNCTION_APP }}"
+          RESOURCE_GROUP="${{ secrets.AZURE_RESOURCE_GROUP }}"
+          STORAGE_ACCOUNT="${{ secrets.AZURE_FUNCTION_STORAGE }}"
+          CONTAINER_NAME="${{ secrets.AZURE_FUNCTION_STORAGE_CONTAINER }}"
+          ZIP_FILE="functionapp.zip"
+          REGION="${{ secrets.AZURE_FA_REGION }}"
+          SAS_EXPIRY_MINUTES=10
 
-        # 0. Validate region
-        if ! az functionapp list-consumption-locations -o tsv | grep -qi "^$REGION$"; then
-          echo "❌ Invalid Function App region: $REGION"
-          exit 1
-        fi
+          # 0. Validate region
+          if ! az functionapp list-consumption-locations -o tsv | grep -qi "^$REGION$"; then
+            echo "❌ Invalid Function App region: $REGION"
+            exit 1
+          fi
 
-        # 1. Check if Function App exists
-        APP_EXISTS=$(az functionapp show \
-          --name "$FUNCTION_APP" \
-          --resource-group "$RESOURCE_GROUP" \
-          --query "name" -o tsv 2>/dev/null || echo "")
-
-        # 2. Create Function App if it doesn't exist
-        if [ -z "$APP_EXISTS" ]; then
-          echo "Function App does not exist, creating..."
-          az functionapp create \
+          # 1. Check if Function App exists
+          APP_EXISTS=$(az functionapp show \
             --name "$FUNCTION_APP" \
             --resource-group "$RESOURCE_GROUP" \
-            --storage-account "$STORAGE_ACCOUNT" \
-            --runtime python \
-            --functions-version 4 \
-            --consumption-plan-location "$REGION"
-        else
-          echo "Function App exists, skipping creation."
-        fi
+            --query "name" -o tsv 2>/dev/null || echo "")
 
-        # 3. Zip the function app (only if folder exists)
-        if [ -d "./src/function-app" ]; then
-          echo "[1/4] Creating ZIP..."
-          zip -r "$ZIP_FILE" ./src/function-app > /dev/null
-        else
-          echo "❌ Function App folder './src/function-app' not found."
-          exit 1
-        fi
+          # 2. Create Function App if it doesn't exist
+          if [ -z "$APP_EXISTS" ]; then
+            echo "Function App does not exist, creating..."
+            az functionapp create \
+              --name "$FUNCTION_APP" \
+              --resource-group "$RESOURCE_GROUP" \
+              --storage-account "$STORAGE_ACCOUNT" \
+              --runtime python \
+              --functions-version 4 \
+              --consumption-plan-location "$REGION"
+          else
+            echo "Function App exists, skipping creation."
+          fi
 
-        # 4. Upload ZIP to blob storage
-        echo "[2/4] Uploading ZIP to blob storage..."
-        az storage blob upload \
-          --account-name "$STORAGE_ACCOUNT" \
-          --container-name "$CONTAINER_NAME" \
-          --name "$ZIP_FILE" \
-          --file "$ZIP_FILE" \
-          --overwrite \
-          --auth-mode login
+          # 3. Zip the function app (only if folder exists)
+          if [ -d "./src/function-app" ]; then
+            echo "[1/4] Creating ZIP..."
+            zip -r "$ZIP_FILE" ./src/function-app > /dev/null
+          else
+            echo "❌ Function App folder './src/function-app' not found."
+            exit 1
+          fi
 
-        # 5. Generate SAS token
-        echo "[3/4] Generating SAS token..."
-        BLOB_EXPIRY=$(python3 -c "from datetime import datetime, timedelta; print((datetime.utcnow() + timedelta(minutes=$SAS_EXPIRY_MINUTES)).strftime('%Y-%m-%dT%H:%MZ'))")
-        BLOB_SAS=$(az storage blob generate-sas \
-          --account-name "$STORAGE_ACCOUNT" \
-          --container-name "$CONTAINER_NAME" \
-          --name "$ZIP_FILE" \
-          --permissions r \
-          --expiry "$BLOB_EXPIRY" \
-          --https-only \
-          --auth-mode login \
-          -o tsv)
+          # 4. Upload ZIP to blob storage
+          echo "[2/4] Uploading ZIP to blob storage..."
+          az storage blob upload \
+            --account-name "$STORAGE_ACCOUNT" \
+            --container-name "$CONTAINER_NAME" \
+            --name "$ZIP_FILE" \
+            --file "$ZIP_FILE" \
+            --overwrite \
+            --auth-mode login
 
-        # 6. Configure Function App to run from ZIP
-        echo "[4/4] Configuring Function App to run from ZIP..."
-        BLOB_URL="https://$STORAGE_ACCOUNT.blob.core.windows.net/$CONTAINER_NAME/$ZIP_FILE?$BLOB_SAS"
-        az functionapp config appsettings set \
-          --name "$FUNCTION_APP" \
-          --resource-group "$RESOURCE_GROUP" \
-          --settings "WEBSITE_RUN_FROM_PACKAGE=$BLOB_URL"
+          # 5. Generate SAS token
+          echo "[3/4] Generating SAS token..."
+          BLOB_EXPIRY=$(python3 -c "from datetime import datetime, timedelta; print((datetime.utcnow() + timedelta(minutes=$SAS_EXPIRY_MINUTES)).strftime('%Y-%m-%dT%H:%MZ'))")
+          BLOB_SAS=$(az storage blob generate-sas \
+            --account-name "$STORAGE_ACCOUNT" \
+            --container-name "$CONTAINER_NAME" \
+            --name "$ZIP_FILE" \
+            --permissions r \
+            --expiry "$BLOB_EXPIRY" \
+            --https-only \
+            --auth-mode login \
+            -o tsv)
 
-        # 7. Verify deployment
-        echo "✅ Deployment complete. Verifying..."
-        az functionapp config appsettings list \
-          --name "$FUNCTION_APP" \
-          --resource-group "$RESOURCE_GROUP" \
-          --query "[?name=='WEBSITE_RUN_FROM_PACKAGE']"
+          # 6. Configure Function App to run from ZIP
+          echo "[4/4] Configuring Function App to run from ZIP..."
+          BLOB_URL="https://$STORAGE_ACCOUNT.blob.core.windows.net/$CONTAINER_NAME/$ZIP_FILE?$BLOB_SAS"
+          az functionapp config appsettings set \
+            --name "$FUNCTION_APP" \
+            --resource-group "$RESOURCE_GROUP" \
+            --settings "WEBSITE_RUN_FROM_PACKAGE=$BLOB_URL"
+
+          # 7. Verify deployment
+          echo "✅ Deployment complete. Verifying..."
+          az functionapp config appsettings list \
+            --name "$FUNCTION_APP" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query "[?name=='WEBSITE_RUN_FROM_PACKAGE']"
