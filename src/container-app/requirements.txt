@@ -16,3 +16,5 @@ redis_entraid
 jinja2
 dotenv
 aiohttp
+httpx
+pyjwt

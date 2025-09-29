@@ -4,17 +4,28 @@ import json
 import logging
 from typing import List, Dict, Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
 from azure.identity import DefaultAzureCredential
 from azure.keyvault.secrets import SecretClient
 from azure.search.documents.aio import SearchClient
 from azure.core.credentials import AzureKeyCredential
+logging.getLogger("azure").setLevel(logging.WARNING)
+
+import jwt
+from jwt.algorithms import RSAAlgorithm
 import redis.asyncio as redis
+
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+
 from openai import AsyncAzureOpenAI
+
 from dotenv import load_dotenv
 
+import httpx
 from models.models import ChatRequest, ChatResponse, SourceDocument
+import logging
 
 logger = logging.getLogger("liotrag")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
@@ -25,12 +36,33 @@ app = FastAPI(title="Azure Container App + OpenAI + AI Search")
 # Environment Variables & Key Vault
 # -------------------------------
 load_dotenv()
+
 KEY_VAULT_URL = os.getenv("KEY_VAULT_URL")
+
 REDIS_SECRET_NAME = os.getenv("AZURE_REDIS_CACHE_SECRET_NAME")
+
 OPENAI_SECRET_NAME = os.getenv("AZURE_OPENAI_SECRET_NAME")
+
 AI_SEARCH_SECRET_NAME = os.getenv("AZURE_AI_SEARCH_SECRET_NAME")
 AI_SEARCH_URL = os.getenv("AZURE_AI_SEARCH_URL")
 AI_SEARCH_INDEX_NAME = os.getenv("AZURE_AI_SEARCH_INDEX_NAME")
+
+CLIENT_ID = os.getenv("AZURE_CLIENT_ID")
+TENANT_ID = os.getenv("AZURE_TENANT_ID")
+CLIENT_SECRET_NAME = os.getenv("AZURE_CLIENT_SECRET_NAME")
+
+AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
+TOKEN_ENDPOINT = f"{AUTHORITY}/oauth2/v2.0/token"
+JWKS_URI = f"{AUTHORITY}/discovery/v2.0/keys"
+
+AUDIENCE = CLIENT_ID  # primary audience (we'll also accept api://<client_id>)
+ISSUER = f"https://login.microsoftonline.com/{TENANT_ID}/v2.0"  # v2 issuer form
+# Some tokens (esp. acquired via legacy /oauth2/token or conditional access flows) may use the v1 issuer form (sts.windows.net)
+ALLOWED_ISSUERS = {
+    ISSUER,
+    f"https://sts.windows.net/{TENANT_ID}/",  # v1 issuer format ends with a trailing slash
+}
+ACCEPTED_AUDIENCES = {CLIENT_ID, f"api://{CLIENT_ID}"}
 
 if not KEY_VAULT_URL or not REDIS_SECRET_NAME or not OPENAI_SECRET_NAME:
     raise ValueError("KEY_VAULT_URL, AZURE_REDIS_CACHE_SECRET_NAME, and AZURE_OPENAI_SECRET_NAME must be set.")
@@ -99,6 +131,95 @@ jinja_env = Environment(
 )
 GEN_PROMPT_TEMPLATE = "gen_prompt.j2"
 REWRITE_PROMPT_TEMPLATE = "rewrite_prompt.j2"
+
+# -------------------------------
+# Authentication Flow
+# -------------------------------
+CLIENT_SECRET = secret_client.get_secret(CLIENT_SECRET_NAME).value
+security = HTTPBearer()
+
+async def get_signing_key(token: str, jwks_uri: str):
+    """Find the correct signing key from the JWKS"""
+    # Get header to find which kid was used
+    header = jwt.get_unverified_header(token)
+    kid = header["kid"]
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(jwks_uri)
+        if resp.status_code != 200:
+            raise HTTPException(status_code=500, detail="Failed to fetch JWKS")   
+        jwks = resp.json()
+
+    for key in jwks["keys"]:
+        if key["kid"] == kid:
+            return key
+    raise HTTPException(status_code=401, detail="No matching JWK found.")
+
+
+async def verify_jwt(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Validate bearer token against Entra ID JWKS.
+
+    Converts the matched JWK into an RSA public key (PyJWT expects a key object / PEM),
+    then decodes and validates issuer + (primary) audience. If your token uses the
+    App ID URI form (api://<client_id>) you may wish to extend audience handling.
+    """
+    token = credentials.credentials
+    key_dict = await get_signing_key(token, JWKS_URI)
+
+    try:
+        # Convert JWK (dict) -> RSA public key instance accepted by PyJWT
+        public_key = RSAAlgorithm.from_jwk(json.dumps(key_dict))
+
+        # Decode without enforcing iss/aud so we can allow multiple acceptable values
+        decoded = jwt.decode(
+            token,
+            public_key,
+            algorithms=["RS256"],
+            options={
+                "verify_aud": False,  # we'll check manually
+                "verify_iss": False,  # we'll check manually
+            },
+        )
+
+        token_iss = decoded.get("iss")
+        if token_iss not in ALLOWED_ISSUERS:
+            raise HTTPException(status_code=401, detail=f"Invalid issuer: {token_iss}")
+
+        token_aud = decoded.get("aud")
+        # aud can be a string or list (AAD usually string)
+        if isinstance(token_aud, str):
+            aud_values = {token_aud}
+        else:
+            aud_values = set(token_aud or [])
+        if aud_values.isdisjoint(ACCEPTED_AUDIENCES):
+            raise HTTPException(status_code=401, detail=f"Invalid audience: {token_aud}")
+
+        return decoded
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
+
+@app.get("/get_auth")
+async def get_auth():
+    """Request an access token from Entra ID using client credentials flow"""
+    data = {
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "scope": f"api://{CLIENT_ID}/.default",
+        "grant_type": "client_credentials",
+    }
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(TOKEN_ENDPOINT, data=data)
+        if resp.status_code != 200:
+            raise HTTPException(status_code=resp.status_code, detail=resp.text)
+        return resp.json()  # contains access_token, expires_in, etc.
+
+@app.get("/test_auth")
+async def test_auth(decoded: dict = Depends(verify_jwt)):
+    """Test authentication. Dependency already validated JWT and returns decoded claims."""
+    return {"message": "Authenticated", "user": decoded}
 
 # -------------------------------
 # Helper Functions
@@ -198,8 +319,9 @@ def health_check():
     return {"status": "healthy"}
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat_with_openai(request: ChatRequest):
+async def chat_with_openai(request: ChatRequest, _: None = Depends(verify_jwt)):
     """Primary chat endpoint implementing naive+iterative RAG with query rewriting and Redis memory."""
+
     session_id = request.session_id
     user_prompt = request.user_prompt.strip()
     if not user_prompt:
