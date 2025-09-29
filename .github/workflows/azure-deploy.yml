@@ -13,20 +13,19 @@ env:
   DOCKERFILE_PATH: ./Dockerfiles/Dockerfile.aca
   IMAGE_NAME: liotrag-aca
   IMAGE_VERSION: "0.2.0"
-  SAS_EXPIRY_HOURS: 1
   AZURE_FUNCTION_ZIP_NAME: functionapp.zip
 
 jobs:
   # -----------------------------
-  # Build Stage (Container App)
+  # Build & Push Container Image
   # -----------------------------
-  build:
+  build-and-push:
     runs-on: ubuntu-latest
     if: contains(github.event.head_commit.message, '[skip ci]') == false
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install deps
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y python3 python3-pip python3-dev gcc musl-dev libffi-dev make curl
@@ -46,70 +45,38 @@ jobs:
           docker build --no-cache -f "$DOCKERFILE_PATH" -t "$IMAGE_TAG" .
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
 
-      - name: Save artifact
-        run: echo "${IMAGE_TAG}" > image_tag.txt
+      - name: Docker login to ACR
+        run: |
+          echo "${{ secrets.AZURE_CLIENT_SECRET }}" | docker login "${{ secrets.AZURE_ACR_LOGIN_SERVER }}" \
+            -u "${{ secrets.AZURE_CLIENT_ID }}" --password-stdin
+
+      - name: Push Docker image
+        run: |
+          docker push "$IMAGE_TAG"
+          docker tag "$IMAGE_TAG" "${{ secrets.AZURE_ACR_LOGIN_SERVER }}/$IMAGE_NAME:dev-latest"
+          docker push "${{ secrets.AZURE_ACR_LOGIN_SERVER }}/$IMAGE_NAME:dev-latest"
+
+      - name: Save IMAGE_TAG for deploy jobs
+        run: echo "$IMAGE_TAG" > image_tag.txt
       - uses: actions/upload-artifact@v4
         with:
           name: image_tag
           path: image_tag.txt
 
   # -----------------------------
-  # Push Stage (Container App)
+  # Deploy Container App
   # -----------------------------
-  push:
+  deploy-container-app:
     runs-on: ubuntu-latest
-    needs: build
+    needs: build-and-push
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: image_tag
+
       - name: Load IMAGE_TAG
         run: echo "IMAGE_TAG=$(cat image_tag.txt)" >> $GITHUB_ENV
-
-      - name: Install deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y python3 python3-pip curl
-          pip3 install --upgrade pip azure-cli docker
-
-      - name: Azure Login
-        run: |
-          az login --service-principal \
-            -u "${{ secrets.AZURE_CLIENT_ID }}" \
-            -p "${{ secrets.AZURE_CLIENT_SECRET }}" \
-            --tenant "${{ secrets.AZURE_TENANT_ID }}"
-          az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
-
-      - name: Docker Push
-        run: |
-          docker login "${{ secrets.AZURE_ACR_LOGIN_SERVER }}" \
-            -u "${{ secrets.AZURE_CLIENT_ID }}" \
-            -p "${{ secrets.AZURE_CLIENT_SECRET }}"
-          docker push "$IMAGE_TAG"
-          docker tag "$IMAGE_TAG" "${{ secrets.AZURE_ACR_LOGIN_SERVER }}/$IMAGE_NAME:dev-latest"
-          docker push "${{ secrets.AZURE_ACR_LOGIN_SERVER }}/$IMAGE_NAME:dev-latest"
-
-      - name: Save artifact
-        run: echo "${IMAGE_TAG}" > final_image.txt
-      - uses: actions/upload-artifact@v4
-        with:
-          name: final_image
-          path: final_image.txt
-
-  # -----------------------------
-  # Deploy Stage (Container App)
-  # -----------------------------
-  deploy-container-app:
-    runs-on: ubuntu-latest
-    needs: push
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: final_image
-      - name: Load IMAGE_TAG
-        run: echo "IMAGE_TAG=$(cat final_image.txt)" >> $GITHUB_ENV
 
       - name: Install deps
         run: |
@@ -150,12 +117,12 @@ jobs:
               AZURE_OPENAI_DEPLOYMENT="${{ secrets.AZURE_OPENAI_DEPLOYMENT }}" \
               AZURE_OPENAI_API_VERSION="${{ secrets.AZURE_OPENAI_API_VERSION }}"
 
-  # ---------------------------------
-  # Deploy Stage (Azure Function App)
-  # ---------------------------------
+  # -----------------------------
+  # Deploy Function App
+  # -----------------------------
   deploy-function-app:
     runs-on: ubuntu-latest
-    needs: build
+    needs: build-and-push
     steps:
       - uses: actions/checkout@v4
 
