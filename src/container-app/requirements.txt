@@ -13,4 +13,8 @@ azure-search-documents
 redis
 redis_entraid
 
-openai
+jinja2
+dotenv
+aiohttp
+httpx
+pyjwt
