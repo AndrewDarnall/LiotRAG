@@ -8,4 +8,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY ./src/container-app ./container_app
 
+ENV PYTHONPATH=/app/container_app
+
+
 CMD ["uvicorn", "container_app.main:app", "--host", "0.0.0.0", "--port", "80"]
