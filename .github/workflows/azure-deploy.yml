@@ -101,28 +101,13 @@ jobs:
           CONTAINERAPPS_ENV="${{ secrets.AZURE_CONTAINERAPPS_ENV }}"
           IMAGE="$IMAGE_TAG"
 
-          # Check if Container App exists
           APP_EXISTS=$(az containerapp show \
             --name "$CONTAINER_APP" \
             --resource-group "$RESOURCE_GROUP" \
             --query "name" -o tsv || echo "")
 
           if [ -n "$APP_EXISTS" ]; then
-            echo "Container App exists, disabling active revisions if any..."
-            ACTIVE_REVS=$(az containerapp revision list \
-              --name "$CONTAINER_APP" \
-              --resource-group "$RESOURCE_GROUP" \
-              --query "[?active==true].name" -o tsv || echo "")
-            
-            if [ -n "$ACTIVE_REVS" ]; then
-              for rev in $ACTIVE_REVS; do
-                az containerapp revision update --name "$rev" \
-                  --resource-group "$RESOURCE_GROUP" \
-                  --set active=false
-              done
-            fi
-
-            echo "Updating Container App with new image..."
+            echo "Updating existing Container App with new image..."
             az containerapp update \
               --name "$CONTAINER_APP" \
               --resource-group "$RESOURCE_GROUP" \
@@ -138,7 +123,7 @@ jobs:
                 AZURE_OPENAI_DEPLOYMENT="${{ secrets.AZURE_OPENAI_DEPLOYMENT }}" \
                 AZURE_OPENAI_API_VERSION="${{ secrets.AZURE_OPENAI_API_VERSION }}"
           else
-            echo "Container App does not exist, creating a new one..."
+            echo "Container App does not exist, creating..."
             az containerapp create \
               --name "$CONTAINER_APP" \
               --resource-group "$RESOURCE_GROUP" \
@@ -148,6 +133,7 @@ jobs:
               --target-port 80 \
               --cpu 2.0 \
               --memory 2.0Gi \
+              --revision-mode Single \
               --set-env-vars \
                 KEY_VAULT_URL="${{ secrets.KEY_VAULT_URL }}" \
                 AZURE_REDIS_CACHE_SECRET_NAME="${{ secrets.AZURE_REDIS_CACHE_SECRET_NAME }}" \
@@ -159,6 +145,7 @@ jobs:
                 AZURE_OPENAI_DEPLOYMENT="${{ secrets.AZURE_OPENAI_DEPLOYMENT }}" \
                 AZURE_OPENAI_API_VERSION="${{ secrets.AZURE_OPENAI_API_VERSION }}"
           fi
+
 
   # -----------------------------
   # Deploy Function App
