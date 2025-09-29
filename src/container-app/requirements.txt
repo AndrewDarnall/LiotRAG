@@ -3,6 +3,8 @@ fastapi
 uvicorn[standard]
 pydantic
 
+openai
+
 # Azure Specific Requirements
 azure-identity
 azure-ai-inference
