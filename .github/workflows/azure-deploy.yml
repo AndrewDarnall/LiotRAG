@@ -1,3 +1,168 @@
+name: CI/CD Azure Deployment
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "src/container-app/**"
+      - "src/function-app/**"
+
+env:
+  DOCKER_DRIVER: overlay2
+  DOCKERFILE_PATH: ./Dockerfiles/Dockerfile.aca
+  IMAGE_NAME: liotrag-aca
+  IMAGE_VERSION: "0.2.0"
+  AZURE_FUNCTION_ZIP_NAME: functionapp.zip
+
+jobs:
+  # -----------------------------
+  # Build & Push Container Image
+  # -----------------------------
+  build-and-push:
+    runs-on: ubuntu-latest
+    if: contains(github.event.head_commit.message, '[skip ci]') == false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-pip python3-dev gcc musl-dev libffi-dev make curl
+          pip3 install --upgrade pip azure-cli docker
+
+      - name: Azure Login
+        run: |
+          az login --service-principal \
+            -u "${{ secrets.AZURE_CLIENT_ID }}" \
+            -p "${{ secrets.AZURE_CLIENT_SECRET }}" \
+            --tenant "${{ secrets.AZURE_TENANT_ID }}"
+          az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+
+      - name: Build Docker image
+        run: |
+          IMAGE_TAG="${{ secrets.AZURE_ACR_LOGIN_SERVER }}/$IMAGE_NAME:${GITHUB_REF_NAME}-${GITHUB_SHA::7}"
+          docker build --no-cache -f "$DOCKERFILE_PATH" -t "$IMAGE_TAG" .
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+
+      - name: Docker login to ACR
+        run: |
+          echo "${{ secrets.AZURE_CLIENT_SECRET }}" | docker login "${{ secrets.AZURE_ACR_LOGIN_SERVER }}" \
+            -u "${{ secrets.AZURE_CLIENT_ID }}" --password-stdin
+
+      - name: Push Docker image
+        run: |
+          docker push "$IMAGE_TAG"
+          docker tag "$IMAGE_TAG" "${{ secrets.AZURE_ACR_LOGIN_SERVER }}/$IMAGE_NAME:dev-latest"
+          docker push "${{ secrets.AZURE_ACR_LOGIN_SERVER }}/$IMAGE_NAME:dev-latest"
+
+      - name: Save IMAGE_TAG for deploy jobs
+        run: echo "$IMAGE_TAG" > image_tag.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: image_tag
+          path: image_tag.txt
+
+  # -----------------------------
+  # Deploy Container App
+  # -----------------------------
+  deploy-container-app:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: image_tag
+
+      - name: Load IMAGE_TAG
+        run: echo "IMAGE_TAG=$(cat image_tag.txt)" >> $GITHUB_ENV
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-pip curl
+          pip3 install --upgrade pip azure-cli
+
+      - name: Azure Login
+        run: |
+          az login --service-principal \
+            -u "${{ secrets.AZURE_CLIENT_ID }}" \
+            -p "${{ secrets.AZURE_CLIENT_SECRET }}" \
+            --tenant "${{ secrets.AZURE_TENANT_ID }}"
+          az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+
+      - name: Deploy Container App
+        run: |
+          set -e
+          CONTAINER_APP="${{ secrets.AZURE_CONTAINER_APP }}"
+          RESOURCE_GROUP="${{ secrets.AZURE_RESOURCE_GROUP }}"
+          CONTAINERAPPS_ENV="${{ secrets.AZURE_CONTAINERAPPS_ENV }}"
+          IMAGE="$IMAGE_TAG"
+
+          # Check if Container App exists
+          APP_EXISTS=$(az containerapp show \
+            --name "$CONTAINER_APP" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query "name" -o tsv || echo "")
+
+          if [ -n "$APP_EXISTS" ]; then
+            echo "Container App exists, disabling active revisions if any..."
+            ACTIVE_REVS=$(az containerapp revision list \
+              --name "$CONTAINER_APP" \
+              --resource-group "$RESOURCE_GROUP" \
+              --query "[?active==true].name" -o tsv || echo "")
+            
+            if [ -n "$ACTIVE_REVS" ]; then
+              for rev in $ACTIVE_REVS; do
+                az containerapp revision update --name "$rev" \
+                  --resource-group "$RESOURCE_GROUP" \
+                  --set active=false
+              done
+            fi
+
+            echo "Updating Container App with new image..."
+            az containerapp update \
+              --name "$CONTAINER_APP" \
+              --resource-group "$RESOURCE_GROUP" \
+              --image "$IMAGE" \
+              --set-env-vars \
+                KEY_VAULT_URL="${{ secrets.KEY_VAULT_URL }}" \
+                AZURE_REDIS_CACHE_SECRET_NAME="${{ secrets.AZURE_REDIS_CACHE_SECRET_NAME }}" \
+                AZURE_OPENAI_SECRET_NAME="${{ secrets.AZURE_OPENAI_SECRET_NAME }}" \
+                AZURE_AI_SEARCH_SECRET_NAME="${{ secrets.AZURE_AI_SEARCH_SECRET_NAME }}" \
+                AZURE_AI_SEARCH_URL="${{ secrets.AZURE_AI_SEARCH_URL }}" \
+                AZURE_AI_SEARCH_INDEX_NAME="${{ secrets.AZURE_AI_SEARCH_INDEX_NAME }}" \
+                AZURE_OPENAI_ENDPOINT="${{ secrets.AZURE_OPENAI_ENDPOINT }}" \
+                AZURE_OPENAI_DEPLOYMENT="${{ secrets.AZURE_OPENAI_DEPLOYMENT }}" \
+                AZURE_OPENAI_API_VERSION="${{ secrets.AZURE_OPENAI_API_VERSION }}"
+          else
+            echo "Container App does not exist, creating a new one..."
+            az containerapp create \
+              --name "$CONTAINER_APP" \
+              --resource-group "$RESOURCE_GROUP" \
+              --environment "$CONTAINERAPPS_ENV" \
+              --image "$IMAGE" \
+              --ingress external \
+              --target-port 80 \
+              --cpu 2.0 \
+              --memory 2.0Gi \
+              --set-env-vars \
+                KEY_VAULT_URL="${{ secrets.KEY_VAULT_URL }}" \
+                AZURE_REDIS_CACHE_SECRET_NAME="${{ secrets.AZURE_REDIS_CACHE_SECRET_NAME }}" \
+                AZURE_OPENAI_SECRET_NAME="${{ secrets.AZURE_OPENAI_SECRET_NAME }}" \
+                AZURE_AI_SEARCH_SECRET_NAME="${{ secrets.AZURE_AI_SEARCH_SECRET_NAME }}" \
+                AZURE_AI_SEARCH_URL="${{ secrets.AZURE_AI_SEARCH_URL }}" \
+                AZURE_AI_SEARCH_INDEX_NAME="${{ secrets.AZURE_AI_SEARCH_INDEX_NAME }}" \
+                AZURE_OPENAI_ENDPOINT="${{ secrets.AZURE_OPENAI_ENDPOINT }}" \
+                AZURE_OPENAI_DEPLOYMENT="${{ secrets.AZURE_OPENAI_DEPLOYMENT }}" \
+                AZURE_OPENAI_API_VERSION="${{ secrets.AZURE_OPENAI_API_VERSION }}"
+          fi
+
+  # -----------------------------
+  # Deploy Function App
+  # -----------------------------
 # -----------------------------
 # Deploy Function App
 # -----------------------------
