@@ -1,175 +1,92 @@
-name: CI/CD Azure Deployment
+# -----------------------------
+# Deploy Function App
+# -----------------------------
+deploy-function-app:
+  runs-on: ubuntu-latest
+  needs: build-and-push
+  steps:
+    - uses: actions/checkout@v4
 
-on:
-  push:
-    branches:
-      - main
-    paths:
-      - "src/container-app/**"
-      - "src/function-app/**"
+    - name: Install deps
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y zip python3 python3-pip curl
+        pip3 install --upgrade pip azure-cli
 
-env:
-  DOCKER_DRIVER: overlay2
-  DOCKERFILE_PATH: ./Dockerfiles/Dockerfile.aca
-  IMAGE_NAME: liotrag-aca
-  IMAGE_VERSION: "0.2.0"
-  AZURE_FUNCTION_ZIP_NAME: functionapp.zip
+    - name: Azure Login
+      run: |
+        az login --service-principal \
+          -u "${{ secrets.AZURE_CLIENT_ID }}" \
+          -p "${{ secrets.AZURE_CLIENT_SECRET }}" \
+          --tenant "${{ secrets.AZURE_TENANT_ID }}"
+        az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
 
-jobs:
-  # -----------------------------
-  # Build & Push Container Image
-  # -----------------------------
-  build-and-push:
-    runs-on: ubuntu-latest
-    if: contains(github.event.head_commit.message, '[skip ci]') == false
-    steps:
-      - uses: actions/checkout@v4
+    - name: Deploy Function App
+      run: |
+        set -e
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y python3 python3-pip python3-dev gcc musl-dev libffi-dev make curl
-          pip3 install --upgrade pip azure-cli docker
+        FUNCTION_APP="${{ secrets.AZURE_FUNCTION_APP }}"
+        RESOURCE_GROUP="${{ secrets.AZURE_RESOURCE_GROUP }}"
+        STORAGE_ACCOUNT="${{ secrets.AZURE_FUNCTION_STORAGE }}"
+        CONTAINER_NAME="${{ secrets.AZURE_FUNCTION_STORAGE_CONTAINER }}"
+        ZIP_FILE="functionapp.zip"
+        SAS_EXPIRY_MINUTES=10
 
-      - name: Azure Login
-        run: |
-          az login --service-principal \
-            -u "${{ secrets.AZURE_CLIENT_ID }}" \
-            -p "${{ secrets.AZURE_CLIENT_SECRET }}" \
-            --tenant "${{ secrets.AZURE_TENANT_ID }}"
-          az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+        # 1. Ensure Function App exists
+        APP_EXISTS=$(az functionapp show \
+          --name "$FUNCTION_APP" \
+          --resource-group "$RESOURCE_GROUP" \
+          --query "name" -o tsv || echo "")
 
-      - name: Build Docker image
-        run: |
-          IMAGE_TAG="${{ secrets.AZURE_ACR_LOGIN_SERVER }}/$IMAGE_NAME:${GITHUB_REF_NAME}-${GITHUB_SHA::7}"
-          docker build --no-cache -f "$DOCKERFILE_PATH" -t "$IMAGE_TAG" .
-          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
-
-      - name: Docker login to ACR
-        run: |
-          echo "${{ secrets.AZURE_CLIENT_SECRET }}" | docker login "${{ secrets.AZURE_ACR_LOGIN_SERVER }}" \
-            -u "${{ secrets.AZURE_CLIENT_ID }}" --password-stdin
-
-      - name: Push Docker image
-        run: |
-          docker push "$IMAGE_TAG"
-          docker tag "$IMAGE_TAG" "${{ secrets.AZURE_ACR_LOGIN_SERVER }}/$IMAGE_NAME:dev-latest"
-          docker push "${{ secrets.AZURE_ACR_LOGIN_SERVER }}/$IMAGE_NAME:dev-latest"
-
-      - name: Save IMAGE_TAG for deploy jobs
-        run: echo "$IMAGE_TAG" > image_tag.txt
-      - uses: actions/upload-artifact@v4
-        with:
-          name: image_tag
-          path: image_tag.txt
-
-  # -----------------------------
-  # Deploy Container App
-  # -----------------------------
-  deploy-container-app:
-    runs-on: ubuntu-latest
-    needs: build-and-push
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: image_tag
-
-      - name: Load IMAGE_TAG
-        run: echo "IMAGE_TAG=$(cat image_tag.txt)" >> $GITHUB_ENV
-
-      - name: Install deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y python3 python3-pip curl
-          pip3 install --upgrade pip azure-cli
-
-      - name: Azure Login
-        run: |
-          az login --service-principal \
-            -u "${{ secrets.AZURE_CLIENT_ID }}" \
-            -p "${{ secrets.AZURE_CLIENT_SECRET }}" \
-            --tenant "${{ secrets.AZURE_TENANT_ID }}"
-          az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
-
-      - name: Deploy Container App
-        run: |
-          CONTAINER_APP="${{ secrets.AZURE_CONTAINER_APP }}"
-          RESOURCE_GROUP="${{ secrets.AZURE_RESOURCE_GROUP }}"
-          CONTAINERAPPS_ENV="${{ secrets.AZURE_CONTAINERAPPS_ENV }}"
-          IMAGE="$IMAGE_TAG"
-
-          # Check if Container App exists
-          APP_EXISTS=$(az containerapp show \
-            --name "$CONTAINER_APP" \
+        if [ -z "$APP_EXISTS" ]; then
+          echo "Function App does not exist, creating..."
+          az functionapp create \
+            --name "$FUNCTION_APP" \
             --resource-group "$RESOURCE_GROUP" \
-            --query "name" -o tsv || echo "")
+            --storage-account "$STORAGE_ACCOUNT" \
+            --consumption-plan-location "${{ secrets.AZURE_REGION }}" \
+            --runtime python \
+            --functions-version 4
+        fi
 
-          if [ -n "$APP_EXISTS" ]; then
-            echo "Container App exists, updating image..."
-            az containerapp update \
-              --name "$CONTAINER_APP" \
-              --resource-group "$RESOURCE_GROUP" \
-              --image "$IMAGE" \
-              --set-env-vars \
-                KEY_VAULT_URL="${{ secrets.KEY_VAULT_URL }}" \
-                AZURE_REDIS_CACHE_SECRET_NAME="${{ secrets.AZURE_REDIS_CACHE_SECRET_NAME }}" \
-                AZURE_OPENAI_SECRET_NAME="${{ secrets.AZURE_OPENAI_SECRET_NAME }}" \
-                AZURE_AI_SEARCH_SECRET_NAME="${{ secrets.AZURE_AI_SEARCH_SECRET_NAME }}" \
-                AZURE_AI_SEARCH_URL="${{ secrets.AZURE_AI_SEARCH_URL }}" \
-                AZURE_AI_SEARCH_INDEX_NAME="${{ secrets.AZURE_AI_SEARCH_INDEX_NAME }}" \
-                AZURE_OPENAI_ENDPOINT="${{ secrets.AZURE_OPENAI_ENDPOINT }}" \
-                AZURE_OPENAI_DEPLOYMENT="${{ secrets.AZURE_OPENAI_DEPLOYMENT }}" \
-                AZURE_OPENAI_API_VERSION="${{ secrets.AZURE_OPENAI_API_VERSION }}"
-          else
-            echo "Container App does not exist, creating a new one..."
-            az containerapp create \
-              --name "$CONTAINER_APP" \
-              --resource-group "$RESOURCE_GROUP" \
-              --environment "$CONTAINERAPPS_ENV" \
-              --image "$IMAGE" \
-              --ingress external \
-              --target-port 80 \
-              --cpu 2.0 \
-              --memory 2.0Gi \
-              --set-env-vars \
-                KEY_VAULT_URL="${{ secrets.KEY_VAULT_URL }}" \
-                AZURE_REDIS_CACHE_SECRET_NAME="${{ secrets.AZURE_REDIS_CACHE_SECRET_NAME }}" \
-                AZURE_OPENAI_SECRET_NAME="${{ secrets.AZURE_OPENAI_SECRET_NAME }}" \
-                AZURE_AI_SEARCH_SECRET_NAME="${{ secrets.AZURE_AI_SEARCH_SECRET_NAME }}" \
-                AZURE_AI_SEARCH_URL="${{ secrets.AZURE_AI_SEARCH_URL }}" \
-                AZURE_AI_SEARCH_INDEX_NAME="${{ secrets.AZURE_AI_SEARCH_INDEX_NAME }}" \
-                AZURE_OPENAI_ENDPOINT="${{ secrets.AZURE_OPENAI_ENDPOINT }}" \
-                AZURE_OPENAI_DEPLOYMENT="${{ secrets.AZURE_OPENAI_DEPLOYMENT }}" \
-                AZURE_OPENAI_API_VERSION="${{ secrets.AZURE_OPENAI_API_VERSION }}"
+        # 2. Zip the function app
+        echo "[1/4] Creating ZIP..."
+        zip -r "$ZIP_FILE" ./src/function-app > /dev/null
 
-  # -----------------------------
-  # Deploy Function App
-  # -----------------------------
-  deploy-function-app:
-    runs-on: ubuntu-latest
-    needs: build-and-push
-    steps:
-      - uses: actions/checkout@v4
+        # 3. Upload ZIP to blob storage
+        echo "[2/4] Uploading ZIP to blob storage..."
+        az storage blob upload \
+          --account-name "$STORAGE_ACCOUNT" \
+          --container-name "$CONTAINER_NAME" \
+          --name "$ZIP_FILE" \
+          --file "$ZIP_FILE" \
+          --overwrite \
+          --auth-mode login
 
-      - name: Install deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y zip python3 python3-pip curl
-          pip3 install --upgrade pip azure-cli
+        # 4. Generate SAS token
+        echo "[3/4] Generating SAS token..."
+        BLOB_EXPIRY=$(python3 -c "from datetime import datetime, timedelta; print((datetime.utcnow() + timedelta(minutes=$SAS_EXPIRY_MINUTES)).strftime('%Y-%m-%dT%H:%MZ'))")
+        BLOB_SAS=$(az storage blob generate-sas \
+          --account-name "$STORAGE_ACCOUNT" \
+          --container-name "$CONTAINER_NAME" \
+          --name "$ZIP_FILE" \
+          --permissions r \
+          --expiry "$BLOB_EXPIRY" \
+          --https-only \
+          --auth-mode login \
+          -o tsv)
 
-      - name: Azure Login
-        run: |
-          az login --service-principal \
-            -u "${{ secrets.AZURE_CLIENT_ID }}" \
-            -p "${{ secrets.AZURE_CLIENT_SECRET }}" \
-            --tenant "${{ secrets.AZURE_TENANT_ID }}"
-          az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+        # 5. Configure Function App to run from ZIP
+        echo "[4/4] Configuring Function App to run from ZIP..."
+        BLOB_URL="https://$STORAGE_ACCOUNT.blob.core.windows.net/$CONTAINER_NAME/$ZIP_FILE?$BLOB_SAS"
+        az functionapp config appsettings set \
+          --name "$FUNCTION_APP" \
+          --resource-group "$RESOURCE_GROUP" \
+          --settings "WEBSITE_RUN_FROM_PACKAGE=$BLOB_URL"
 
-      - name: Deploy Function App
-        run: |
-          zip -r functionapp.zip ./src/function-app
-          az functionapp deployment source config-zip \
-            --name "${{ secrets.AZURE_FUNCTION_APP }}" \
-            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
-            --src functionapp.zip
+        # 6. Verify
+        echo "✅ Deployment complete. Verifying..."
+        az functionapp config appsettings list \
+          --name "$FUNCTION_APP" \
+          --resource-group "$RESOURCE_GROUP" \
+          --query "[?name=='WEBSITE_RUN_FROM_PACKAGE']"
