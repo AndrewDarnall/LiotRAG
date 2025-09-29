@@ -21,7 +21,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from openai import AsyncAzureOpenAI
 
-from dotenv import load_dotenv
+#from dotenv import load_dotenv
 
 import httpx
 from models.models import ChatRequest, ChatResponse, SourceDocument
@@ -35,21 +35,20 @@ app = FastAPI(title="Azure Container App + OpenAI + AI Search")
 # -------------------------------
 # Environment Variables & Key Vault
 # -------------------------------
-load_dotenv()
+#load_dotenv()
 
 KEY_VAULT_URL = os.getenv("KEY_VAULT_URL")
 
 REDIS_SECRET_NAME = os.getenv("AZURE_REDIS_CACHE_SECRET_NAME")
-
 OPENAI_SECRET_NAME = os.getenv("AZURE_OPENAI_SECRET_NAME")
-
 AI_SEARCH_SECRET_NAME = os.getenv("AZURE_AI_SEARCH_SECRET_NAME")
+CLIENT_SECRET_NAME = os.getenv("AZURE_CLIENT_SECRET_NAME")
+
 AI_SEARCH_URL = os.getenv("AZURE_AI_SEARCH_URL")
 AI_SEARCH_INDEX_NAME = os.getenv("AZURE_AI_SEARCH_INDEX_NAME")
 
 CLIENT_ID = os.getenv("AZURE_ENTRAID_CLIENT_ID")
 TENANT_ID = os.getenv("AZURE_TENANT_ID")
-CLIENT_SECRET_NAME = os.getenv("AZURE_CLIENT_SECRET_NAME")
 
 AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
 TOKEN_ENDPOINT = f"{AUTHORITY}/oauth2/v2.0/token"
@@ -64,13 +63,66 @@ ALLOWED_ISSUERS = {
 }
 ACCEPTED_AUDIENCES = {CLIENT_ID, f"api://{CLIENT_ID}"}
 
-if not KEY_VAULT_URL or not REDIS_SECRET_NAME or not OPENAI_SECRET_NAME:
-    raise ValueError("KEY_VAULT_URL, AZURE_REDIS_CACHE_SECRET_NAME, and AZURE_OPENAI_SECRET_NAME must be set.")
+REQUIRED_ENV_VARS = [
+    ("KEY_VAULT_URL", KEY_VAULT_URL),
+    ("AZURE_REDIS_CACHE_SECRET_NAME", REDIS_SECRET_NAME),
+    ("AZURE_OPENAI_SECRET_NAME", OPENAI_SECRET_NAME),
+    ("AZURE_AI_SEARCH_SECRET_NAME", AI_SEARCH_SECRET_NAME),
+    ("AZURE_CLIENT_SECRET_NAME", CLIENT_SECRET_NAME),
+    ("AZURE_AI_SEARCH_URL", AI_SEARCH_URL),
+    ("AZURE_AI_SEARCH_INDEX_NAME", AI_SEARCH_INDEX_NAME),
+    ("AZURE_ENTRAID_CLIENT_ID", CLIENT_ID),
+    ("AZURE_TENANT_ID", TENANT_ID),
+]
+
+missing = [name for name, val in REQUIRED_ENV_VARS if not val]
+if missing:
+    raise ValueError(
+        "Missing required environment variables: " + ", ".join(missing) +
+        ". Ensure they are configured in Azure Container Apps revision settings (environment variables) or bicep/terraform deployment."
+    )
+
+def _redact(val: str | None, keep: int = 4) -> str:
+    if not val:
+        return "<unset>"
+    if len(val) <= keep * 2:
+        return "****"
+    return val[:keep] + "****" + val[-keep:]
+
+logger.info(
+    "Env summary: KV=%s SEARCH_URL=%s INDEX=%s CLIENT_ID=%s TENANT=%s RedisSecret=%s OpenAISecret=%s SearchSecret=%s ClientSecretName=%s",
+    KEY_VAULT_URL,
+    AI_SEARCH_URL,
+    AI_SEARCH_INDEX_NAME,
+    _redact(CLIENT_ID),
+    _redact(TENANT_ID),
+    REDIS_SECRET_NAME,
+    OPENAI_SECRET_NAME,
+    AI_SEARCH_SECRET_NAME,
+    CLIENT_SECRET_NAME,
+)
 
 logger.info("Initializing credentials and secret client")
 
 credential = DefaultAzureCredential()
 secret_client = SecretClient(vault_url=KEY_VAULT_URL, credential=credential)
+
+def fetch_secret(secret_name: str, purpose: str) -> str:
+    """Retrieve a secret value by name with explicit validation & logging.
+
+    Raises a descriptive error if the name is empty or retrieval fails.
+    """
+    if not secret_name:
+        raise ValueError(f"Secret name for {purpose} is empty/None. Check env var configuration.")
+    try:
+        value = secret_client.get_secret(secret_name).value
+        if not value:
+            raise ValueError(f"Secret '{secret_name}' for {purpose} returned empty value.")
+        logger.info("Fetched secret '%s' for %s", secret_name, purpose)
+        return value
+    except Exception as e:
+        logger.exception("Failed to fetch secret '%s' for %s", secret_name, purpose)
+        raise
 
 # -------------------------------
 # Redis setup
@@ -89,7 +141,7 @@ def parse_azure_redis_secret(raw: str) -> str:
         raise ValueError(f"Cannot parse Redis secret: {raw}")
     return f"rediss://:{password}@{host_port}"
 
-raw_redis_secret = secret_client.get_secret(REDIS_SECRET_NAME).value
+raw_redis_secret = fetch_secret(REDIS_SECRET_NAME, "Redis")
 redis_conn_str = parse_azure_redis_secret(raw_redis_secret)
 redis_client = redis.from_url(redis_conn_str, decode_responses=True)
 REDIS_TTL_SECONDS = int(os.getenv("REDIS_SESSION_TTL", "3600"))  # default 1 hour
@@ -99,7 +151,7 @@ logger.info("Redis client configured with TTL=%s, max_history=%s", REDIS_TTL_SEC
 # -------------------------------
 # Azure OpenAI setup
 # -------------------------------
-openai_api_key = secret_client.get_secret(OPENAI_SECRET_NAME).value.strip()
+openai_api_key = fetch_secret(OPENAI_SECRET_NAME, "OpenAI API key").strip()
 AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
 AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT")
 AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION")
@@ -113,7 +165,7 @@ openai_client = AsyncAzureOpenAI(
 # -------------------------------
 # Azure AI Search setup
 # -------------------------------
-ai_search_key = secret_client.get_secret(AI_SEARCH_SECRET_NAME).value
+ai_search_key = fetch_secret(AI_SEARCH_SECRET_NAME, "Azure AI Search key")
 search_client = SearchClient(
     endpoint=AI_SEARCH_URL,
     index_name=AI_SEARCH_INDEX_NAME,
@@ -135,7 +187,7 @@ REWRITE_PROMPT_TEMPLATE = "rewrite_prompt.j2"
 # -------------------------------
 # Authentication Flow
 # -------------------------------
-CLIENT_SECRET = secret_client.get_secret(CLIENT_SECRET_NAME).value
+CLIENT_SECRET = fetch_secret(CLIENT_SECRET_NAME, "Client credential secret")
 security = HTTPBearer()
 
 async def get_signing_key(token: str, jwks_uri: str):
@@ -278,17 +330,16 @@ async def query_rewrite_if_needed(original_question: str, history: List[Dict[str
 async def search_documents(query: str, top_k: int = 5) -> List[SourceDocument]:
     try:
         logger.info("Searching AI Search with query='%s' top=%d", query, top_k)
-        async with search_client:
-            results = await search_client.search(query, top=top_k)
-            docs: List[SourceDocument] = []
-            async for doc in results:
-                snippet = doc.get("chunk") or doc.get("content") or ""
-                docs.append(SourceDocument(
-                    title=doc.get("title"),
-                    url=doc.get("url"),
-                    snippet=snippet
-                ))
-            return docs
+        results = await search_client.search(query, top=top_k)
+        docs: List[SourceDocument] = []
+        async for doc in results:
+            snippet = doc.get("chunk") or doc.get("content") or ""
+            docs.append(SourceDocument(
+                title=doc.get("title"),
+                url=doc.get("url"),
+                snippet=snippet
+            ))
+        return docs
     except Exception as e:
         logger.exception("Search failure: %s", e)
         return []
