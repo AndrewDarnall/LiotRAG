@@ -94,43 +94,71 @@ jobs:
 
       - name: Deploy Container App
         run: |
-          # Check if the Container App exists
+          CONTAINER_APP="${{ secrets.AZURE_CONTAINER_APP }}"
+          RESOURCE_GROUP="${{ secrets.AZURE_RESOURCE_GROUP }}"
+          CONTAINERAPPS_ENV="${{ secrets.AZURE_CONTAINERAPPS_ENV }}"
+          IMAGE="$IMAGE_TAG"
+
+          # Check if Container App exists
           APP_EXISTS=$(az containerapp show \
-            --name "${{ secrets.AZURE_CONTAINER_APP }}" \
-            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --name "$CONTAINER_APP" \
+            --resource-group "$RESOURCE_GROUP" \
             --query "name" -o tsv || echo "")
 
           if [ -n "$APP_EXISTS" ]; then
-            # Disable old revisions if any exist
+            echo "Container App exists, updating active revisions..."
+
             ACTIVE_REVS=$(az containerapp revision list \
-              --name "${{ secrets.AZURE_CONTAINER_APP }}" \
-              --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+              --name "$CONTAINER_APP" \
+              --resource-group "$RESOURCE_GROUP" \
               --query "[?active==true].name" -o tsv || echo "")
 
             if [ -n "$ACTIVE_REVS" ]; then
               for rev in $ACTIVE_REVS; do
                 az containerapp revision update --name $rev \
-                  --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+                  --resource-group "$RESOURCE_GROUP" \
                   --set active=false
               done
             fi
-          fi
 
-          # Update or create Container App with new image
-          az containerapp update \
-            --name "${{ secrets.AZURE_CONTAINER_APP }}" \
-            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
-            --image "$IMAGE_TAG" \
-            --set-env-vars \
-              KEY_VAULT_URL="${{ secrets.KEY_VAULT_URL }}" \
-              AZURE_REDIS_CACHE_SECRET_NAME="${{ secrets.AZURE_REDIS_CACHE_SECRET_NAME }}" \
-              AZURE_OPENAI_SECRET_NAME="${{ secrets.AZURE_OPENAI_SECRET_NAME }}" \
-              AZURE_AI_SEARCH_SECRET_NAME="${{ secrets.AZURE_AI_SEARCH_SECRET_NAME }}" \
-              AZURE_AI_SEARCH_URL="${{ secrets.AZURE_AI_SEARCH_URL }}" \
-              AZURE_AI_SEARCH_INDEX_NAME="${{ secrets.AZURE_AI_SEARCH_INDEX_NAME }}" \
-              AZURE_OPENAI_ENDPOINT="${{ secrets.AZURE_OPENAI_ENDPOINT }}" \
-              AZURE_OPENAI_DEPLOYMENT="${{ secrets.AZURE_OPENAI_DEPLOYMENT }}" \
-              AZURE_OPENAI_API_VERSION="${{ secrets.AZURE_OPENAI_API_VERSION }}"
+            # Update existing Container App with new image
+            az containerapp update \
+              --name "$CONTAINER_APP" \
+              --resource-group "$RESOURCE_GROUP" \
+              --image "$IMAGE" \
+              --set-env-vars \
+                KEY_VAULT_URL="${{ secrets.KEY_VAULT_URL }}" \
+                AZURE_REDIS_CACHE_SECRET_NAME="${{ secrets.AZURE_REDIS_CACHE_SECRET_NAME }}" \
+                AZURE_OPENAI_SECRET_NAME="${{ secrets.AZURE_OPENAI_SECRET_NAME }}" \
+                AZURE_AI_SEARCH_SECRET_NAME="${{ secrets.AZURE_AI_SEARCH_SECRET_NAME }}" \
+                AZURE_AI_SEARCH_URL="${{ secrets.AZURE_AI_SEARCH_URL }}" \
+                AZURE_AI_SEARCH_INDEX_NAME="${{ secrets.AZURE_AI_SEARCH_INDEX_NAME }}" \
+                AZURE_OPENAI_ENDPOINT="${{ secrets.AZURE_OPENAI_ENDPOINT }}" \
+                AZURE_OPENAI_DEPLOYMENT="${{ secrets.AZURE_OPENAI_DEPLOYMENT }}" \
+                AZURE_OPENAI_API_VERSION="${{ secrets.AZURE_OPENAI_API_VERSION }}"
+
+          else
+            echo "Container App does not exist, creating a new one..."
+            az containerapp create \
+              --name "$CONTAINER_APP" \
+              --resource-group "$RESOURCE_GROUP" \
+              --environment "$CONTAINERAPPS_ENV" \
+              --image "$IMAGE" \
+              --ingress external \
+              --target-port 80 \
+              --cpu 2.0 \
+              --memory 2.0Gi \
+              --set-env-vars \
+                KEY_VAULT_URL="${{ secrets.KEY_VAULT_URL }}" \
+                AZURE_REDIS_CACHE_SECRET_NAME="${{ secrets.AZURE_REDIS_CACHE_SECRET_NAME }}" \
+                AZURE_OPENAI_SECRET_NAME="${{ secrets.AZURE_OPENAI_SECRET_NAME }}" \
+                AZURE_AI_SEARCH_SECRET_NAME="${{ secrets.AZURE_AI_SEARCH_SECRET_NAME }}" \
+                AZURE_AI_SEARCH_URL="${{ secrets.AZURE_AI_SEARCH_URL }}" \
+                AZURE_AI_SEARCH_INDEX_NAME="${{ secrets.AZURE_AI_SEARCH_INDEX_NAME }}" \
+                AZURE_OPENAI_ENDPOINT="${{ secrets.AZURE_OPENAI_ENDPOINT }}" \
+                AZURE_OPENAI_DEPLOYMENT="${{ secrets.AZURE_OPENAI_DEPLOYMENT }}" \
+                AZURE_OPENAI_API_VERSION="${{ secrets.AZURE_OPENAI_API_VERSION }}"
+          fi
 
   # -----------------------------
   # Deploy Function App
