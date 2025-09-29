@@ -35,7 +35,7 @@ app = FastAPI(title="Azure Container App + OpenAI + AI Search")
 # -------------------------------
 # Environment Variables & Key Vault
 # -------------------------------
-#load_dotenv()
+# load_dotenv()
 
 KEY_VAULT_URL = os.getenv("KEY_VAULT_URL")
 
