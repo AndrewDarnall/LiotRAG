@@ -7,11 +7,12 @@ from typing import List, Dict, Any
 from fastapi import FastAPI, HTTPException
 from azure.identity import DefaultAzureCredential
 from azure.keyvault.secrets import SecretClient
-from azure.search.documents import SearchClient
+from azure.search.documents.aio import SearchClient
 from azure.core.credentials import AzureKeyCredential
 import redis.asyncio as redis
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from openai import AsyncAzureOpenAI
+from dotenv import load_dotenv
 
 from models.models import ChatRequest, ChatResponse, SourceDocument
 
@@ -23,6 +24,7 @@ app = FastAPI(title="Azure Container App + OpenAI + AI Search")
 # -------------------------------
 # Environment Variables & Key Vault
 # -------------------------------
+load_dotenv()
 KEY_VAULT_URL = os.getenv("KEY_VAULT_URL")
 REDIS_SECRET_NAME = os.getenv("AZURE_REDIS_CACHE_SECRET_NAME")
 OPENAI_SECRET_NAME = os.getenv("AZURE_OPENAI_SECRET_NAME")
@@ -75,8 +77,6 @@ openai_client = AsyncAzureOpenAI(
     azure_endpoint=AZURE_OPENAI_ENDPOINT,
     api_version=AZURE_OPENAI_API_VERSION
 )
-AZURE_OPENAI_EMBED_DEPLOYMENT = os.getenv("AZURE_OPENAI_EMBED_DEPLOYMENT")  # if embeddings needed later
-logger.info("Azure OpenAI async client initialized. Deployment=%s", os.getenv("AZURE_OPENAI_DEPLOYMENT"))
 
 # -------------------------------
 # Azure AI Search setup
@@ -154,19 +154,20 @@ async def query_rewrite_if_needed(original_question: str, history: List[Dict[str
     logger.info("Query rewrite raw output: %s", rewritten)
     return rewritten
 
-def search_documents(query: str, top_k: int = 5) -> List[SourceDocument]:
+async def search_documents(query: str, top_k: int = 5) -> List[SourceDocument]:
     try:
         logger.info("Searching AI Search with query='%s' top=%d", query, top_k)
-        results = search_client.search(query, top=top_k)
-        docs: List[SourceDocument] = []
-        for doc in results:
-            snippet = doc.get("chunk") or doc.get("content") or ""
-            docs.append(SourceDocument(
-                title=doc.get("title"),
-                url=doc.get("url"),
-                snippet=snippet
-            ))
-        return docs
+        async with search_client:
+            results = await search_client.search(query, top=top_k)
+            docs: List[SourceDocument] = []
+            async for doc in results:
+                snippet = doc.get("chunk") or doc.get("content") or ""
+                docs.append(SourceDocument(
+                    title=doc.get("title"),
+                    url=doc.get("url"),
+                    snippet=snippet
+                ))
+            return docs
     except Exception as e:
         logger.exception("Search failure: %s", e)
         return []
@@ -192,9 +193,9 @@ async def generate_answer(history: List[Dict[str, str]], user_question: str, rew
 # -------------------------------
 # FastAPI endpoints
 # -------------------------------
-@app.get("/")
-def root():
-    return {"message": "FastAPI is running!"}
+@app.get("/health")
+def health_check():
+    return {"status": "healthy"}
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat_with_openai(request: ChatRequest):
@@ -223,13 +224,11 @@ async def chat_with_openai(request: ChatRequest):
             await save_history(session_id, history)
             return ChatResponse(
                 response_text=answer_text,
-                rewritten_query=None,
-                sources=[]
             )
         search_query = rewritten_query if has_prior else user_prompt
 
         # Retrieve context docs
-        docs = search_documents(search_query, top_k=5)
+        docs = await search_documents(search_query, top_k=5)
 
         # Build answer
         answer_text = await generate_answer(
@@ -250,8 +249,6 @@ async def chat_with_openai(request: ChatRequest):
 
         return ChatResponse(
             response_text=answer_text,
-            rewritten_query=rewritten_query if has_prior else None,
-            sources=docs
         )
     except Exception as e:
         logger.exception("Error in /chat: %s", e)

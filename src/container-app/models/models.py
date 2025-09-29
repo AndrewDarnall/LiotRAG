@@ -16,8 +16,7 @@ class SourceDocument(BaseModel):
 
 class ChatResponse(BaseModel):
     response_text: str
-    rewritten_query: Optional[str] = None
-    sources: List[SourceDocument] = Field(default_factory=list)
+    #sources: List[SourceDocument] = Field(default_factory=list)
 
 class SearchRequest(BaseModel):
     query: str
