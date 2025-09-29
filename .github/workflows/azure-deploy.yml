@@ -179,30 +179,34 @@ jobs:
           STORAGE_ACCOUNT="${{ secrets.AZURE_FUNCTION_STORAGE }}"
           CONTAINER_NAME="${{ secrets.AZURE_FUNCTION_STORAGE_CONTAINER }}"
           ZIP_FILE="functionapp.zip"
+          REGION="${{ secrets.AZURE_FA_REGION }}"
           SAS_EXPIRY_MINUTES=10
 
-          # 1. Ensure Function App exists
+          # 1. Check if Function App exists
           APP_EXISTS=$(az functionapp show \
             --name "$FUNCTION_APP" \
             --resource-group "$RESOURCE_GROUP" \
             --query "name" -o tsv || echo "")
 
+          # 2. Create Function App if it doesn't exist
           if [ -z "$APP_EXISTS" ]; then
             echo "Function App does not exist, creating..."
             az functionapp create \
               --name "$FUNCTION_APP" \
               --resource-group "$RESOURCE_GROUP" \
               --storage-account "$STORAGE_ACCOUNT" \
-              --consumption-plan-location "${{ secrets.AZURE_REGION }}" \
               --runtime python \
-              --functions-version 4
+              --functions-version 4 \
+              --consumption-plan-location "$REGION"
+          else
+            echo "Function App exists, skipping creation."
           fi
 
-          # 2. Zip the function app
+          # 3. Zip the function app
           echo "[1/4] Creating ZIP..."
           zip -r "$ZIP_FILE" ./src/function-app > /dev/null
 
-          # 3. Upload ZIP to blob storage
+          # 4. Upload ZIP to blob storage
           echo "[2/4] Uploading ZIP to blob storage..."
           az storage blob upload \
             --account-name "$STORAGE_ACCOUNT" \
@@ -212,7 +216,7 @@ jobs:
             --overwrite \
             --auth-mode login
 
-          # 4. Generate SAS token
+          # 5. Generate SAS token
           echo "[3/4] Generating SAS token..."
           BLOB_EXPIRY=$(python3 -c "from datetime import datetime, timedelta; print((datetime.utcnow() + timedelta(minutes=$SAS_EXPIRY_MINUTES)).strftime('%Y-%m-%dT%H:%MZ'))")
           BLOB_SAS=$(az storage blob generate-sas \
@@ -225,7 +229,7 @@ jobs:
             --auth-mode login \
             -o tsv)
 
-          # 5. Configure Function App to run from ZIP
+          # 6. Configure Function App to run from ZIP
           echo "[4/4] Configuring Function App to run from ZIP..."
           BLOB_URL="https://$STORAGE_ACCOUNT.blob.core.windows.net/$CONTAINER_NAME/$ZIP_FILE?$BLOB_SAS"
           az functionapp config appsettings set \
@@ -233,7 +237,7 @@ jobs:
             --resource-group "$RESOURCE_GROUP" \
             --settings "WEBSITE_RUN_FROM_PACKAGE=$BLOB_URL"
 
-          # 6. Verify
+          # 7. Verify deployment
           echo "✅ Deployment complete. Verifying..."
           az functionapp config appsettings list \
             --name "$FUNCTION_APP" \
