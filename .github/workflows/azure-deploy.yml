@@ -94,14 +94,22 @@ jobs:
 
       - name: Deploy Container App
         run: |
-          for rev in $(az containerapp revision list \
-              --name "${{ secrets.AZURE_CONTAINER_APP }}" \
-              --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
-              --query "[?active==true].name" -o tsv); do
-            az containerapp revision update --name $rev \
-              --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
-              --set active=false
-          done
+          # Get active revisions
+          ACTIVE_REVS=$(az containerapp revision list \
+            --name "${{ secrets.AZURE_CONTAINER_APP }}" \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --query "[?active==true].name" -o tsv)
+
+          # Only disable if revisions exist
+          if [ -n "$ACTIVE_REVS" ]; then
+            for rev in $ACTIVE_REVS; do
+              az containerapp revision update --name $rev \
+                --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+                --set active=false
+            done
+          fi
+
+          # Update Container App with new image
           az containerapp update \
             --name "${{ secrets.AZURE_CONTAINER_APP }}" \
             --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
