@@ -21,11 +21,22 @@ jobs:
   # -----------------------------
   build-and-push:
     runs-on: ubuntu-latest
-    if: contains(join(github.event.commits.*.modified, ' '), 'src/container-app/') || 
-        contains(join(github.event.commits.*.added, ' '), 'src/container-app/') ||
-        contains(join(github.event.commits.*.removed, ' '), 'src/container-app/')
     steps:
       - uses: actions/checkout@v4
+
+      # --- Detect container-app changes ---
+      - name: Check for container-app changes
+        id: container_diff
+        run: |
+          git fetch origin main --depth=2
+          CHANGED=$(git diff --name-only HEAD^ HEAD | grep '^src/container-app/' || true)
+          echo "changed=$CHANGED" >> $GITHUB_OUTPUT
+
+      - name: Skip if no changes
+        if: ${{ steps.container_diff.outputs.changed == '' }}
+        run: |
+          echo "No changes in ./src/container-app, skipping job."
+          exit 0
 
       - name: Install dependencies
         run: |
@@ -72,14 +83,25 @@ jobs:
   deploy-container-app:
     runs-on: ubuntu-latest
     needs: build-and-push
-    if: contains(join(github.event.commits.*.modified, ' '), 'src/container-app/') || 
-        contains(join(github.event.commits.*.added, ' '), 'src/container-app/') ||
-        contains(join(github.event.commits.*.removed, ' '), 'src/container-app/')
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: image_tag
+
+      # --- Detect container-app changes ---
+      - name: Check for container-app changes
+        id: container_diff
+        run: |
+          git fetch origin main --depth=2
+          CHANGED=$(git diff --name-only HEAD^ HEAD | grep '^src/container-app/' || true)
+          echo "changed=$CHANGED" >> $GITHUB_OUTPUT
+
+      - name: Skip if no changes
+        if: ${{ steps.container_diff.outputs.changed == '' }}
+        run: |
+          echo "No changes in ./src/container-app, skipping job."
+          exit 0
 
       - name: Load IMAGE_TAG
         run: echo "IMAGE_TAG=$(cat image_tag.txt)" >> $GITHUB_ENV
@@ -112,7 +134,6 @@ jobs:
             --query "name" -o tsv || echo "")
 
           if [ -n "$APP_EXISTS" ]; then
-            echo "Updating existing Container App with new image..."
             az containerapp update \
               --name "$CONTAINER_APP" \
               --resource-group "$RESOURCE_GROUP" \
@@ -132,9 +153,7 @@ jobs:
                 AZURE_ENTRAID_CLIENT_ID="${{ secrets.AZURE_ENTRAID_CLIENT_ID }}" \
                 AZURE_TENANT_ID="${{ secrets.AZURE_TENANT_ID }}" \
                 AZURE_CLIENT_SECRET_NAME="${{ secrets.AZURE_CLIENT_SECRET_NAME }}"
-
           else
-            echo "Container App does not exist, creating..."
             az containerapp create \
               --name "$CONTAINER_APP" \
               --resource-group "$RESOURCE_GROUP" \
@@ -160,8 +179,6 @@ jobs:
                 AZURE_ENTRAID_CLIENT_ID="${{ secrets.AZURE_ENTRAID_CLIENT_ID }}" \
                 AZURE_TENANT_ID="${{ secrets.AZURE_TENANT_ID }}" \
                 AZURE_CLIENT_SECRET_NAME="${{ secrets.AZURE_CLIENT_SECRET_NAME }}"
-          fi
-
 
   # -----------------------------
   # Deploy Function App
@@ -169,11 +186,22 @@ jobs:
   deploy-function-app:
     runs-on: ubuntu-latest
     needs: build-and-push
-    if: contains(join(github.event.commits.*.modified, ' '), 'src/function-app/') || 
-        contains(join(github.event.commits.*.added, ' '), 'src/function-app/') ||
-        contains(join(github.event.commits.*.removed, ' '), 'src/function-app/')
     steps:
       - uses: actions/checkout@v4
+
+      # --- Detect function-app changes ---
+      - name: Check for function-app changes
+        id: function_diff
+        run: |
+          git fetch origin main --depth=2
+          CHANGED=$(git diff --name-only HEAD^ HEAD | grep '^src/function-app/' || true)
+          echo "changed=$CHANGED" >> $GITHUB_OUTPUT
+
+      - name: Skip if no changes
+        if: ${{ steps.function_diff.outputs.changed == '' }}
+        run: |
+          echo "No changes in ./src/function-app, skipping job."
+          exit 0
 
       - name: Install deps
         run: |
@@ -192,7 +220,6 @@ jobs:
       - name: Deploy Function App
         run: |
           set -e
-
           FUNCTION_APP="${{ secrets.AZURE_FUNCTION_APP }}"
           RESOURCE_GROUP="${{ secrets.AZURE_RESOURCE_GROUP }}"
           STORAGE_ACCOUNT="${{ secrets.AZURE_FUNCTION_STORAGE }}"
@@ -201,7 +228,7 @@ jobs:
           REGION="${{ secrets.AZURE_FA_REGION }}"
           SAS_EXPIRY_MINUTES=10
 
-          # 0. Validate region (case-insensitive)
+          # 0. Validate region
           REGION_LOWER=$(echo "$REGION" | tr '[:upper:]' '[:lower:]')
           if ! az functionapp list-consumption-locations -o tsv | grep -q "^$REGION_LOWER$"; then
             echo "❌ Invalid Function App region: $REGION"
@@ -216,7 +243,6 @@ jobs:
 
           # 2. Create Function App if it doesn't exist
           if [ -z "$APP_EXISTS" ]; then
-            echo "Function App does not exist, creating..."
             az functionapp create \
               --name "$FUNCTION_APP" \
               --resource-group "$RESOURCE_GROUP" \
@@ -226,9 +252,6 @@ jobs:
               --functions-version 4 \
               --os-type Linux \
               --consumption-plan-location "$REGION_LOWER"
-          else
-            echo "Function App exists, skipping creation."
-          fi
 
           # 3. Ensure storage container exists
           if ! az storage container exists \
@@ -236,16 +259,14 @@ jobs:
               --name "$CONTAINER_NAME" \
               --auth-mode login \
               -o tsv | grep -q "True"; then
-            echo "Storage container '$CONTAINER_NAME' does not exist, creating..."
             az storage container create \
               --account-name "$STORAGE_ACCOUNT" \
               --name "$CONTAINER_NAME" \
               --auth-mode login
           fi
 
-          # 4. Zip the function app (only if folder exists)
+          # 4. Zip the function app
           if [ -d "./src/function-app" ]; then
-            echo "[1/4] Creating ZIP..."
             zip -r "$ZIP_FILE" ./src/function-app > /dev/null
           else
             echo "❌ Function App folder './src/function-app' not found."
@@ -253,7 +274,6 @@ jobs:
           fi
 
           # 5. Upload ZIP to blob storage
-          echo "[2/4] Uploading ZIP to blob storage..."
           az storage blob upload \
             --account-name "$STORAGE_ACCOUNT" \
             --container-name "$CONTAINER_NAME" \
@@ -263,29 +283,4 @@ jobs:
             --auth-mode login
 
           # 6. Generate SAS token
-          echo "[3/4] Generating SAS token..."
-          BLOB_EXPIRY=$(python3 -c "from datetime import datetime, timedelta; print((datetime.utcnow() + timedelta(minutes=$SAS_EXPIRY_MINUTES)).strftime('%Y-%m-%dT%H:%MZ'))")
-          BLOB_SAS=$(az storage blob generate-sas \
-            --account-name "$STORAGE_ACCOUNT" \
-            --container-name "$CONTAINER_NAME" \
-            --name "$ZIP_FILE" \
-            --permissions r \
-            --expiry "$BLOB_EXPIRY" \
-            --https-only \
-            --auth-mode login \
-            -o tsv)
-
-          # 7. Configure Function App to run from ZIP
-          echo "[4/4] Configuring Function App to run from ZIP..."
-          BLOB_URL="https://$STORAGE_ACCOUNT.blob.core.windows.net/$CONTAINER_NAME/$ZIP_FILE?$BLOB_SAS"
-          az functionapp config appsettings set \
-            --name "$FUNCTION_APP" \
-            --resource-group "$RESOURCE_GROUP" \
-            --settings "WEBSITE_RUN_FROM_PACKAGE=$BLOB_URL"
-
-          # 8. Verify deployment
-          echo "✅ Deployment complete. Verifying..."
-          az functionapp config appsettings list \
-            --name "$FUNCTION_APP" \
-            --resource-group "$RESOURCE_GROUP" \
-            --query "[?name=='WEBSITE_RUN_FROM_PACKAGE']"
+          BLOB_EXPIRY=$(python3 -c "from datetime import datetime, timedelta; print((datetime.utcnow() + timedelta(minutes=$SAS_EXPIRY_MINUTES)).strftime('%
