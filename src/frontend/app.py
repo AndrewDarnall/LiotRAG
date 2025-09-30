@@ -55,3 +55,4 @@ async def handle_message(message: cl.Message):
 
     # Send as a single Chainlit message
     await cl.Message(content=assistant_text).send()
+

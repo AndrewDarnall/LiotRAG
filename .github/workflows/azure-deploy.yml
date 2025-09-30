@@ -195,7 +195,7 @@ jobs:
           ZIP_FILE="functionapp.zip"
           SAS_EXPIRY_MINUTES=10
 
-          # 1️⃣ Zip the function app
+          # 1. Zip the function app
           if [ -d "./src/function-app" ]; then
             echo "[1/4] Creating ZIP..."
             zip -r "$ZIP_FILE" ./src/function-app > /dev/null
@@ -204,8 +204,16 @@ jobs:
             exit 1
           fi
 
-          # 2️⃣ Upload ZIP to blob storage
-          echo "[2/4] Uploading ZIP to blob storage..."
+          # 2. Ensure storage container exists
+          echo "[2/4] Ensuring storage container exists..."
+          az storage container create \
+            --account-name "$STORAGE_ACCOUNT" \
+            --name "$CONTAINER_NAME" \
+            --auth-mode login \
+            --output none
+
+          # 3. Upload ZIP to blob storage
+          echo "[3/4] Uploading ZIP to blob storage..."
           az storage blob upload \
             --account-name "$STORAGE_ACCOUNT" \
             --container-name "$CONTAINER_NAME" \
@@ -214,8 +222,8 @@ jobs:
             --overwrite \
             --auth-mode login
 
-          # 3️⃣ Generate SAS token
-          echo "[3/4] Generating SAS token..."
+          # 4. Generate SAS token
+          echo "[4/4] Generating SAS token..."
           BLOB_EXPIRY=$(python3 -c "from datetime import datetime, timedelta; print((datetime.utcnow() + timedelta(minutes=$SAS_EXPIRY_MINUTES)).strftime('%Y-%m-%dT%H:%MZ'))")
           BLOB_SAS=$(az storage blob generate-sas \
             --account-name "$STORAGE_ACCOUNT" \
@@ -227,8 +235,8 @@ jobs:
             --auth-mode login \
             -o tsv)
 
-          # 4️⃣ Update Function App to run from package
-          echo "[4/4] Configuring Function App to run from ZIP..."
+          # 5. Update Function App to run from package
+          echo "[5/5] Configuring Function App to run from ZIP..."
           BLOB_URL="https://$STORAGE_ACCOUNT.blob.core.windows.net/$CONTAINER_NAME/$ZIP_FILE?$BLOB_SAS"
           az functionapp config appsettings set \
             --name "$FUNCTION_APP" \
