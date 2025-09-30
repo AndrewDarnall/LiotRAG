@@ -191,7 +191,7 @@ jobs:
           FUNCTION_APP="${{ secrets.AZURE_FUNCTION_APP }}"
           RESOURCE_GROUP="${{ secrets.AZURE_RESOURCE_GROUP }}"
           STORAGE_ACCOUNT="${{ secrets.AZURE_STORAGE_ACCOUNT }}"
-          CONTAINER_NAME="${{ secrets.AZURE_FUNCTION_STORAGE_CONTAINER }}"
+          CONTAINER_NAME="${{ secrets.AZURE_FUNCTION_APP_STORAGE_CONTAINER }}"
           ZIP_FILE="functionapp.zip"
           SAS_EXPIRY_MINUTES=10
 
