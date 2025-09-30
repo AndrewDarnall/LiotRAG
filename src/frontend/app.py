@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 # LLM Server URL (FastAPI /chat endpoint)
 # -------------------------------
 load_dotenv()
-LLM_API_URL = "https://teams.microsoft.com/l/message/19:4770e4b21ce84f65808be671f6edfd75@thread.v2/1759237142924?context=%7B%22contextType%22%3A%22chat%22%7D"
+LLM_API_URL = "https://liotrag-aca.braveforest-781d5f46.westus2.azurecontainerapps.io"
 if not LLM_API_URL:
     raise ValueError("AZURE_CONTAINER_APP_ENDPOINT must be set in environment variables")
 LLM_API_URL = LLM_API_URL.rstrip("/")
