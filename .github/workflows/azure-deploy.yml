@@ -93,7 +93,7 @@ jobs:
             --tenant "${{ secrets.AZURE_TENANT_ID }}"
           az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
 
-      - name: Deploy Container App
+            - name: Deploy Container App
         run: |
           set -e
           CONTAINER_APP="${{ secrets.AZURE_CONTAINER_APP }}"
@@ -126,7 +126,7 @@ jobs:
                 MAX_HISTORY_TURNS="${{ secrets.MAX_HISTORY_TURNS }}" \
                 AZURE_ENTRAID_CLIENT_ID="${{ secrets.AZURE_ENTRAID_CLIENT_ID }}" \
                 AZURE_TENANT_ID="${{ secrets.AZURE_TENANT_ID }}" \
-                AZURE_CLIENT_SECRET_NAME="${{ secrets.AZURE_CLIENT_SECRET_NAME }}" \
+                AZURE_CLIENT_SECRET_NAME="${{ secrets.AZURE_CLIENT_SECRET_NAME }}"
 
           else
             echo "Container App does not exist, creating..."
@@ -154,7 +154,7 @@ jobs:
                 MAX_HISTORY_TURNS="${{ secrets.MAX_HISTORY_TURNS }}" \
                 AZURE_ENTRAID_CLIENT_ID="${{ secrets.AZURE_ENTRAID_CLIENT_ID }}" \
                 AZURE_TENANT_ID="${{ secrets.AZURE_TENANT_ID }}" \
-                AZURE_CLIENT_SECRET_NAME="${{ secrets.AZURE_CLIENT_SECRET_NAME }}" \
+                AZURE_CLIENT_SECRET_NAME="${{ secrets.AZURE_CLIENT_SECRET_NAME }}"
           fi
 
 
