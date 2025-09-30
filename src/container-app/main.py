@@ -427,4 +427,3 @@ async def chat_with_openai(request: ChatRequest, _: None = Depends(verify_jwt)):
         logger.exception("Error in /chat: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
- 

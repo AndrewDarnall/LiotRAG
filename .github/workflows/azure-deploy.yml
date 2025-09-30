@@ -93,7 +93,7 @@ jobs:
             --tenant "${{ secrets.AZURE_TENANT_ID }}"
           az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
 
-            - name: Deploy Container App
+      - name: Deploy Container App
         run: |
           set -e
           CONTAINER_APP="${{ secrets.AZURE_CONTAINER_APP }}"
