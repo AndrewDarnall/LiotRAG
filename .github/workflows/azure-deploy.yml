@@ -195,9 +195,23 @@ jobs:
           ZIP_FILE="functionapp.zip"
           SAS_EXPIRY_MINUTES=10
 
+          # Safety checks
+          if [ -z "$CONTAINER_NAME" ]; then
+            echo "❌ AZURE_FUNCTION_APP_STORAGE_CONTAINER secret is missing."
+            exit 1
+          fi
+          if [ -z "$STORAGE_ACCOUNT" ]; then
+            echo "❌ AZURE_STORAGE_ACCOUNT secret is missing."
+            exit 1
+          fi
+          if [ -z "$FUNCTION_APP" ]; then
+            echo "❌ AZURE_FUNCTION_APP secret is missing."
+            exit 1
+          fi
+
           # 1. Zip the function app
           if [ -d "./src/function-app" ]; then
-            echo "[1/4] Creating ZIP..."
+            echo "[1/5] Creating ZIP..."
             zip -r "$ZIP_FILE" ./src/function-app > /dev/null
           else
             echo "❌ Function App folder './src/function-app' not found."
@@ -205,7 +219,7 @@ jobs:
           fi
 
           # 2. Ensure storage container exists
-          echo "[2/4] Ensuring storage container exists..."
+          echo "[2/5] Ensuring storage container exists..."
           az storage container create \
             --account-name "$STORAGE_ACCOUNT" \
             --name "$CONTAINER_NAME" \
@@ -213,7 +227,7 @@ jobs:
             --output none
 
           # 3. Upload ZIP to blob storage
-          echo "[3/4] Uploading ZIP to blob storage..."
+          echo "[3/5] Uploading ZIP to blob storage..."
           az storage blob upload \
             --account-name "$STORAGE_ACCOUNT" \
             --container-name "$CONTAINER_NAME" \
@@ -222,9 +236,9 @@ jobs:
             --overwrite \
             --auth-mode login
 
-          # 4. Generate SAS token
-          echo "[4/4] Generating SAS token..."
-          BLOB_EXPIRY=$(python3 -c "from datetime import datetime, timedelta; print((datetime.utcnow() + timedelta(minutes=$SAS_EXPIRY_MINUTES)).strftime('%Y-%m-%dT%H:%MZ'))")
+          # 4. Generate SAS token (user delegation SAS)
+          echo "[4/5] Generating SAS token..."
+          BLOB_EXPIRY=$(python3 -c "from datetime import datetime, timedelta, timezone; print((datetime.now(timezone.utc) + timedelta(minutes=$SAS_EXPIRY_MINUTES)).strftime('%Y-%m-%dT%H:%MZ'))")
           BLOB_SAS=$(az storage blob generate-sas \
             --account-name "$STORAGE_ACCOUNT" \
             --container-name "$CONTAINER_NAME" \
@@ -233,6 +247,7 @@ jobs:
             --expiry "$BLOB_EXPIRY" \
             --https-only \
             --auth-mode login \
+            --as-user \
             -o tsv)
 
           # 5. Update Function App to run from package
