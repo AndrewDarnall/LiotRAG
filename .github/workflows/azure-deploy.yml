@@ -188,7 +188,7 @@ jobs:
         run: |
           set -e
 
-          FUNCTION_APP="${{ secrets.AZURE_FUNCTION_APP }}"
+          FUNCTION_APP="${{ secrets.AZURE_FUNCTION_APP_NAME }}"
           RESOURCE_GROUP="${{ secrets.AZURE_RESOURCE_GROUP }}"
           STORAGE_ACCOUNT="${{ secrets.AZURE_STORAGE_ACCOUNT }}"
           CONTAINER_NAME="${{ secrets.AZURE_FUNCTION_APP_STORAGE_CONTAINER }}"
