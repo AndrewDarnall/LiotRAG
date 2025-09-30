@@ -190,7 +190,7 @@ jobs:
 
           FUNCTION_APP="${{ secrets.AZURE_FUNCTION_APP }}"
           RESOURCE_GROUP="${{ secrets.AZURE_RESOURCE_GROUP }}"
-          STORAGE_ACCOUNT="${{ secrets.AZURE_FUNCTION_STORAGE }}"
+          STORAGE_ACCOUNT="${{ secrets.AZURE_STORAGE_ACCOUNT }}"
           CONTAINER_NAME="${{ secrets.AZURE_FUNCTION_STORAGE_CONTAINER }}"
           ZIP_FILE="functionapp.zip"
           REGION="${{ secrets.AZURE_FA_REGION }}"
@@ -339,7 +339,7 @@ jobs:
   # ------------------------------
   deploy-frontend-container-app:
     runs-on: ubuntu-latest
-    needs: build-and-push
+    needs: frontend-build-and-push
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
