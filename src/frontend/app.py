@@ -19,7 +19,7 @@ LLM_API_URL = LLM_API_URL.rstrip("/")
 @cl.on_chat_start
 async def start_chat():
     """Initialize a new chat session."""
-    async with httpx.AsyncClient(timeout=20) as client:
+    async with httpx.AsyncClient(timeout=90) as client:
         response = await client.get(f"{LLM_API_URL}/get_auth")
         response.raise_for_status()
         data = response.json()
