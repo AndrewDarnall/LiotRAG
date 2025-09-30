@@ -337,7 +337,7 @@ jobs:
   # -----------------------------
   # Deploy Container App
   # -----------------------------
-  deploy-container-app:
+  deploy-frontend-container-app:
     runs-on: ubuntu-latest
     needs: build-and-push
     steps:
