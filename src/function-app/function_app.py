@@ -41,4 +41,3 @@ def scrapePapardo(myTimer: func.TimerRequest) -> None:
     except subprocess.CalledProcessError as e:
         logging.exception("Crawl failed with non-zero exit code")
         raise
-    
